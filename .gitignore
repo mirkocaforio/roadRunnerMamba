@@ -54,7 +54,8 @@ checkpoints/
 # Logs
 logs/
 *.log
-*.txt
+inference*.txt
+profile*.txt
 wandb/
 tensorboard/
 

@@ -1,0 +1,22 @@
+numpy
+pandas
+einops
+opencv-python #==4.12.0.88
+timm
+tqdm
+triton
+torch
+torchvision
+torchaudio
+packaging
+pytest
+chardet
+yacs
+termcolor
+submitit
+tensorboardX
+fvcore
+seaborn
+tensorboard
+Cython
+wandb
