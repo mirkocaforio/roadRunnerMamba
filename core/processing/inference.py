@@ -23,8 +23,10 @@ This module provides three things:
    saved as **PDF** by default (vector, publication ready); PNG is available
    via `--plot-format`.
 
-All figures are written as one file per plot, with the split name as suffix
-(e.g. `confusion_matrix_val.pdf`, `confusion_matrix_test.pdf`).
+All figures are written as one file per plot, with the model label and the
+split name as suffix (e.g. `confusion_matrix_RoadRunnerMamba_val.pdf`,
+`confusion_matrix_Spatial-Mamba_test.pdf`).  The label comes from
+--model-label and is also shown in every figure title.
 """
 
 from typing import Optional, Union, Dict, List, Tuple, Any, Sequence
@@ -126,6 +128,11 @@ def save_figure(
         plt.show()
     plt.close(fig)
     return paths
+
+
+def file_tag(label: str) -> str:
+    """Make a model label safe to embed in a file name."""
+    return re.sub(r'[^A-Za-z0-9._-]+', '_', label).strip('_') or 'model'
 
 
 # ======================================================================
@@ -661,10 +668,14 @@ def plot_training_curves(
     dpi: int = 150,
     log_scale: bool = False,
     prefix: str = 'training',
+    model_label: Optional[str] = None,
 ) -> Dict[str, List[str]]:
     """
     Plot the evolution of loss, accuracy, F1, learning rate and confidence
     across epochs, from a parsed training log.
+
+    When `model_label` is given it is shown in every title and appended to
+    `prefix` in the file names (e.g. training_RoadRunnerMamba_loss).
 
     Produces (one file each):
         <prefix>_loss        train_loss vs val_loss
@@ -684,6 +695,9 @@ def plot_training_curves(
     x = history.epochs
     written: Dict[str, List[str]] = {}
     title_suffix = f" — {history.meta['experiment']}" if 'experiment' in history.meta else ""
+    if model_label:
+        title_suffix = f" — {model_label}{title_suffix}"
+        prefix = f"{prefix}_{file_tag(model_label)}"
 
     print(f"\n{'='*66}")
     print("TRAINING CURVES")
@@ -866,6 +880,7 @@ class Inference:
         --from-checkpoint \
         --evaluate \
         --split separate \
+        --model-label RoadRunnerMamba \
         --plot-all \
         --plot-dir ./plots \
         --export-dir ./plots \
@@ -906,6 +921,8 @@ class Inference:
         strict: bool = False,
         # bf16 autocast for every forward pass (evaluation, benchmarks, latency)
         amp: bool = False,
+        # Name shown in plot titles and plot file names (default: MODEL_NAME)
+        model_label: Optional[str] = None,
         **kwargs
     ):
         """
@@ -934,6 +951,11 @@ class Inference:
                          and plots.  By default the ImageFolder folder names are
                          used (for RSCD: dry, fresh_snow, ice, melted_snow,
                          water, wet).
+            model_label: Model name shown in the plot titles and appended to
+                         the plot file names, e.g. 'Spatial-Mamba' or
+                         'RoadRunnerMamba'.  Defaults to MODEL_NAME; the
+                         JSON reports keep MODEL_NAME, which the JIT-side
+                         stacking relies on.
         """
         if split not in ('val', 'test', 'both', 'separate'):
             raise ValueError(
@@ -950,6 +972,7 @@ class Inference:
         self._class_names_override = list(class_names) if class_names else None
         self.amp = amp
         self.strict = strict
+        self.model_label = model_label or self.MODEL_NAME
 
         # Gestione device
         if device is None:
@@ -2613,6 +2636,7 @@ class Inference:
         results: Dict[str, Any] = {
             'split': split_name,
             'split_mode': self.split,
+            'model_label': self.model_label,
             'model_path': self.model_path,
             'n_samples': len(all_targets),
             'num_classes': self.num_classes,
@@ -2864,6 +2888,11 @@ class Inference:
     # Curve plots — ROC and Precision-Recall
     # ------------------------------------------------------------------
 
+    def _plot_labels(self, results: Dict) -> Tuple[str, str]:
+        """Model label for the figure titles and its file-name-safe form."""
+        label = results.get('model_label') or self.model_label
+        return label, file_tag(label)
+
     def plot_curves(
         self,
         results: Dict,
@@ -2913,6 +2942,7 @@ class Inference:
 
         split       = results.get('split', 'split')
         class_names = results.get('class_names') or self._class_names(split)
+        label, tag  = self._plot_labels(results)
 
         # Curves are normally computed once in _extended_metrics()
         curves = results.get('_curves')
@@ -2966,12 +2996,12 @@ class Inference:
         ax_roc.set_ylim([-0.01, 1.02])
         ax_roc.set_xlabel("False Positive Rate", fontsize=12)
         ax_roc.set_ylabel("True Positive Rate", fontsize=12)
-        ax_roc.set_title(f"ROC Curves — {split.upper()}\n{title}",
+        ax_roc.set_title(f"ROC Curves — {label} / {split.upper()}\n{title}",
                          fontsize=13, fontweight='bold')
         ax_roc.legend(loc="lower right", fontsize=9)
         ax_roc.grid(True, alpha=0.3)
         fig_roc.tight_layout()
-        save_figure(fig_roc, save_dir, f"roc_curves_{split}", plot_format, dpi, show)
+        save_figure(fig_roc, save_dir, f"roc_curves_{tag}_{split}", plot_format, dpi, show)
 
         # ── Figure 2: AUC-Precision-Recall ──────────────────────────────
         fig_pr, ax_pr = plt.subplots(figsize=(8, 7))
@@ -3007,16 +3037,16 @@ class Inference:
         ax_pr.set_ylim([-0.01, 1.02])
         ax_pr.set_xlabel("Recall", fontsize=12)
         ax_pr.set_ylabel("Precision", fontsize=12)
-        ax_pr.set_title(f"Precision-Recall Curves — {split.upper()}\n{title}",
+        ax_pr.set_title(f"Precision-Recall Curves — {label} / {split.upper()}\n{title}",
                         fontsize=13, fontweight='bold')
         ax_pr.legend(loc="lower left", fontsize=9)
         ax_pr.grid(True, alpha=0.3)
         fig_pr.tight_layout()
-        save_figure(fig_pr, save_dir, f"pr_curves_{split}", plot_format, dpi, show)
+        save_figure(fig_pr, save_dir, f"pr_curves_{tag}_{split}", plot_format, dpi, show)
 
         # ── Summary print ────────────────────────────────────────────────
         print(f"\n{'='*60}")
-        print(f"AUC SCORES  [split={split.upper()}]")
+        print(f"AUC SCORES  [{label} | split={split.upper()}]")
         print(f"{'='*60}")
         col = 22
         print(f"  {'Class':<{col}} {'ROC-AUC':>10}   {'PR-AUC (AP)':>12}")
@@ -3118,27 +3148,28 @@ class Inference:
         split = results.get('split', 'split')
         class_names = results.get('class_names') or self._class_names(split)
         accuracy = results.get('accuracy')
+        label, tag = self._plot_labels(results)
 
-        print(f"\nConfusion matrix plots [split={split.upper()}]")
+        print(f"\nConfusion matrix plots [{label} | split={split.upper()}]")
 
         suffix = f"  |  accuracy = {accuracy:.4f}" if accuracy is not None else ""
         fig = self._confusion_matrix_figure(
             cm, class_names,
-            f"Confusion Matrix — {split.upper()}{suffix}",
+            f"Confusion Matrix — {label} / {split.upper()}{suffix}",
             normalized=False,
         )
-        written = {'counts': save_figure(fig, save_dir, f"confusion_matrix_{split}",
+        written = {'counts': save_figure(fig, save_dir, f"confusion_matrix_{tag}_{split}",
                                          plot_format, dpi, show)}
 
         balanced = results.get('balanced_accuracy')
         suffix = f"  |  balanced accuracy = {balanced:.4f}" if balanced is not None else ""
         fig = self._confusion_matrix_figure(
             cm, class_names,
-            f"Confusion Matrix (row-normalized) — {split.upper()}{suffix}",
+            f"Confusion Matrix (row-normalized) — {label} / {split.upper()}{suffix}",
             normalized=True,
         )
         written['normalized'] = save_figure(
-            fig, save_dir, f"confusion_matrix_normalized_{split}",
+            fig, save_dir, f"confusion_matrix_normalized_{tag}_{split}",
             plot_format, dpi, show)
 
         return written
@@ -3166,6 +3197,7 @@ class Inference:
         confidences = results['_confidences']
         correct = results['_predictions'] == results['_targets']
         split = results.get('split', 'split')
+        label, tag = self._plot_labels(results)
 
         fig, (ax_hist, ax_cum) = plt.subplots(1, 2, figsize=(13, 5))
 
@@ -3205,10 +3237,11 @@ class Inference:
         ax_cum.legend(fontsize=9, loc='center left')
         ax_cum.grid(True, alpha=0.3)
 
-        fig.suptitle(f"Confidence analysis — {split.upper()}", fontsize=13, fontweight='bold')
+        fig.suptitle(f"Confidence analysis — {label} / {split.upper()}",
+                     fontsize=13, fontweight='bold')
         fig.tight_layout(rect=(0, 0, 1, 0.95))
-        print(f"\nConfidence histogram [split={split.upper()}]")
-        return save_figure(fig, save_dir, f"confidence_hist_{split}",
+        print(f"\nConfidence histogram [{label} | split={split.upper()}]")
+        return save_figure(fig, save_dir, f"confidence_hist_{tag}_{split}",
                            plot_format, dpi, show)
 
     # ------------------------------------------------------------------
@@ -3227,6 +3260,7 @@ class Inference:
         split = results.get('split', 'split')
         class_names = results.get('class_names') or self._class_names(split)
         per_class = results['per_class']
+        model_label, tag = self._plot_labels(results)
 
         names = [n for n in class_names if n in per_class]
         x = np.arange(len(names))
@@ -3254,7 +3288,8 @@ class Inference:
         )
         ax.set_ylim(0, 1.12)
         ax.set_ylabel('Score', fontsize=12)
-        ax.set_title(f"Per-class metrics — {split.upper()}", fontsize=13, fontweight='bold')
+        ax.set_title(f"Per-class metrics — {model_label} / {split.upper()}",
+                     fontsize=13, fontweight='bold')
         # Below the axes: the bars are tall for every class, so any in-plot
         # legend would cover data.
         ax.legend(fontsize=9, ncol=4, loc='upper center',
@@ -3262,8 +3297,8 @@ class Inference:
         ax.grid(True, alpha=0.3, axis='y')
         fig.tight_layout()
 
-        print(f"\nPer-class metrics plot [split={split.upper()}]")
-        return save_figure(fig, save_dir, f"per_class_metrics_{split}",
+        print(f"\nPer-class metrics plot [{model_label} | split={split.upper()}]")
+        return save_figure(fig, save_dir, f"per_class_metrics_{tag}_{split}",
                            plot_format, dpi, show)
 
     def plot_class_distribution(
@@ -3282,6 +3317,7 @@ class Inference:
         class_names = results.get('class_names') or self._class_names(split)
         per_class = results['per_class']
         names = [n for n in class_names if n in per_class]
+        label, tag = self._plot_labels(results)
 
         support = [per_class[n]['support'] for n in names]
         predicted = [per_class[n]['predicted_count'] for n in names]
@@ -3300,14 +3336,14 @@ class Inference:
         ax.set_xticks(x)
         ax.set_xticklabels(names, rotation=20, ha='right', fontsize=10)
         ax.set_ylabel('Number of samples', fontsize=12)
-        ax.set_title(f"Class distribution: true vs predicted — {split.upper()}",
+        ax.set_title(f"Class distribution: true vs predicted — {label} / {split.upper()}",
                      fontsize=13, fontweight='bold')
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3, axis='y')
         fig.tight_layout()
 
-        print(f"\nClass distribution plot [split={split.upper()}]")
-        return save_figure(fig, save_dir, f"class_distribution_{split}",
+        print(f"\nClass distribution plot [{label} | split={split.upper()}]")
+        return save_figure(fig, save_dir, f"class_distribution_{tag}_{split}",
                            plot_format, dpi, show)
 
     # ------------------------------------------------------------------
@@ -3327,6 +3363,7 @@ class Inference:
         perfect calibration highlighted, plus ECE / MCE in the title.
         """
         split = results.get('split', 'split')
+        label, tag = self._plot_labels(results)
         calibration = results.get('_calibration')
         if calibration is None:
             calibration = self._compute_calibration(
@@ -3367,7 +3404,7 @@ class Inference:
         signed_gap = calibration['signed_gap']
         tendency = 'overconfident' if signed_gap > 0 else 'underconfident'
         ax_rel.set_title(
-            f"Reliability diagram — {split.upper()}  |  "
+            f"Reliability diagram — {label} / {split.upper()}  |  "
             f"ECE = {calibration['ece']:.4f}   MCE = {calibration['mce']:.4f}\n"
             f"mean signed gap = {signed_gap:+.4f}  ({tendency})",
             fontsize=12, fontweight='bold'
@@ -3382,9 +3419,9 @@ class Inference:
         ax_count.grid(True, alpha=0.3)
 
         fig.tight_layout()
-        print(f"\nCalibration plot [split={split.upper()}]  "
+        print(f"\nCalibration plot [{label} | split={split.upper()}]  "
               f"ECE={calibration['ece']:.4f}  MCE={calibration['mce']:.4f}")
-        return save_figure(fig, save_dir, f"calibration_{split}",
+        return save_figure(fig, save_dir, f"calibration_{tag}_{split}",
                            plot_format, dpi, show)
 
     # ------------------------------------------------------------------
@@ -3424,6 +3461,7 @@ class Inference:
         confidences = results['_confidences']
         indices = results['_indices']
         class_names = results.get('class_names') or self._class_names(split)
+        label, tag = self._plot_labels(results)
 
         wrong = np.flatnonzero(predictions != targets)
         if wrong.size == 0:
@@ -3467,7 +3505,7 @@ class Inference:
 
         error_rate = wrong.size / len(targets)
         fig.suptitle(
-            f"Most confident misclassifications — {split.upper()}  |  "
+            f"Most confident misclassifications — {label} / {split.upper()}  |  "
             f"{wrong.size:,} errors of {len(targets):,} ({error_rate*100:.2f}%)",
             fontsize=13, fontweight='bold'
         )
@@ -3475,9 +3513,9 @@ class Inference:
         # with axis('off') tight_layout does not reserve room for them.
         fig.tight_layout(rect=(0, 0, 1, 0.96), h_pad=3.0)
 
-        print(f"\nMisclassified examples plot [split={split.upper()}] — "
+        print(f"\nMisclassified examples plot [{label} | split={split.upper()}] — "
               f"showing {n} of {wrong.size:,} errors")
-        return save_figure(fig, save_dir, f"misclassified_{split}",
+        return save_figure(fig, save_dir, f"misclassified_{tag}_{split}",
                            plot_format, dpi, show)
 
     # ------------------------------------------------------------------
@@ -3739,6 +3777,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help='Run every forward pass under bf16 autocast (CUDA only)')
 
     # --- plotting ---
+    parser.add_argument('--model-label', type=str, default=None,
+                        help='Model name shown in every plot title and appended to the '
+                             'plot file names, e.g. "Spatial-Mamba" or "RoadRunnerMamba" '
+                             '(default: mamba). JSON reports keep the "mamba" name used '
+                             'by the JIT-side stacking')
     parser.add_argument('--plot-format', type=str, default='pdf',
                         choices=list(PLOT_FORMATS),
                         help='Output format for every figure')
@@ -3861,6 +3904,7 @@ def main():
                 show=args.show,
                 dpi=args.dpi,
                 log_scale=args.log_scale_loss,
+                model_label=args.model_label,
             )
             if args.export_dir:
                 history.to_csv(os.path.join(args.export_dir, 'training_history.csv'))
@@ -3916,6 +3960,7 @@ def main():
         class_names=args.class_names,
         amp=args.amp,
         strict=not args.non_strict,
+        model_label=args.model_label,
     )
 
     if args.model_summary or args.benchmark or args.memory:
