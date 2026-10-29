@@ -64,7 +64,6 @@ tensorboard/
 Thumbs.db
 
 # Project specific
-data/
 datasets/
 results/
 output/
